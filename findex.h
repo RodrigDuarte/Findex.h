@@ -10,9 +10,9 @@
 #define FINDEX_EXT_SIZE (32)    // 32 characters
 
 enum FINDEX_TYPE_e {
-  FINDEX_DIR = 0,
-  FINDEX_FILE,
-  FINDEX_UNKNOWN,
+  FINDEX_DIR     = 0,
+  FINDEX_FILE    = 1,
+  FINDEX_UNKNOWN = 2,
 };
 
 typedef enum FINDEX_TYPE_e FINDEX_TYPE;
@@ -33,7 +33,7 @@ struct Findex_Queue_s {
 };
 
 struct Findex_s {
-  char *full_path;
+  char full_path[PATH_MAX];
 
   char name[FINDEX_NAME_SIZE];
   char ext[FINDEX_EXT_SIZE];
@@ -51,44 +51,46 @@ void findex_print(Findex *node, size_t depth);
 #endif  // FINDEX_H
 
 
-// #ifdef FINDEX_IMPLEMENTATION
+#ifdef FINDEX_IMPLEMENTATION
 
-// Private functions forward declarations
+// Private function declarations
 Findex *findex__request_child(Findex_Array *array);
 int findex__queue_append(Findex_Queue *queue, Findex *element);
 
 
 int findex_scan(Findex *node, char *path) {
-  if (path == NULL || node == NULL) {
+  if (node == NULL || path == NULL) {
     printf("[ERROR]: "
            "Error in findex_scan: "
-           "path or node is null\n");
+           "path or node is null\n"
+    );
     return -1;
   }
 
   if (path[strlen(path) - 1] != '/') {
     printf("[ERROR]: "
            "Error in findex_scan: "
-           "The path given is not a directory\n");
+           "The path given is not a directory\n"
+    );
     return -1;
   }
 
-  // Root note will be empty
+  // Root node will be empty
   node->type = FINDEX_DIR;
-  node->full_path = strdup(path);
-  strncpy(node->name, node->full_path, 255);
+  strncpy(node->full_path, path, PATH_MAX - 1);
+  strncpy(node->name, node->full_path, FINDEX_NAME_SIZE - 1);
 
   Findex_Queue queue_findex = {0};
   size_t curr_queue_idx = 0;
 
   Findex *curr_dir = node;
 
-  struct dirent *curr_dirent = NULL;
+  struct dirent *dirent = NULL;
   DIR *dir = NULL;
 
   while (curr_dir != NULL) {
-    // Cycle directories
-    printf("[DEBUG]: Scanning folder %s\n", curr_dir->full_path);
+
+    // Open dir to work with
     dir = opendir(curr_dir->full_path);
     if (dir == NULL) {
       printf("[ERROR]: "
@@ -97,42 +99,46 @@ int findex_scan(Findex *node, char *path) {
       return -1;
     }
 
-    while ((curr_dirent = readdir(dir)) != NULL) {
-      // Cycle single directory
-      if (strncmp(curr_dirent->d_name, ".", strlen(curr_dirent->d_name)) == 0 ||
-          strncmp(curr_dirent->d_name, "..", strlen(curr_dirent->d_name)) == 0) {
+    // Read entire directory
+    while ((dirent = readdir(dir)) != NULL) {
+      // Skip current and previous folders
+      size_t name_len = strlen(dirent->d_name);
+      if (strncmp(dirent->d_name, "." , name_len) == 0 ||
+          strncmp(dirent->d_name, "..", name_len) == 0
+      ) {
         continue;
       }
 
-      Findex *curr_findex = findex__request_child(&curr_dir->children);
-      strncpy(curr_findex->name, curr_dirent->d_name, 255);
-      char *ext = strrchr(curr_dirent->d_name, '.');
+      Findex *new_findex = findex__request_child(&curr_dir->children);
+      strncpy(new_findex->name, dirent->d_name, FINDEX_NAME_SIZE - 1);
+      char *ext = strrchr(dirent->d_name, '.');
       if (ext != NULL) {
-        strncpy(curr_findex->ext, ext, 31);
+        strncpy(new_findex->ext, ext, FINDEX_EXT_SIZE - 1);
       }
-      curr_findex->parent = curr_dir;
+      new_findex->parent = curr_dir;
 
-      if (curr_dirent->d_type == DT_DIR) {
-        curr_findex->type = FINDEX_DIR;
-        curr_findex->full_path = calloc(2048, sizeof(char));
-        snprintf(curr_findex->full_path, 2047, "%s%s/", curr_dir->full_path, curr_findex->name);
-        if (findex__queue_append(&queue_findex, curr_findex) < 0) {
-          return -1;
-        }
-      }
-      else if (curr_dirent->d_type == DT_REG) {
-        curr_findex->type = FINDEX_FILE;
-        curr_findex->full_path = curr_dir->full_path;
-      }
-      else {
-        curr_findex->type = FINDEX_UNKNOWN;
-        curr_findex->full_path = curr_dir->full_path;
+      switch (dirent->d_type) {
+        case DT_DIR: {
+          new_findex->type = FINDEX_DIR;
+          snprintf(new_findex->full_path, PATH_MAX - 1, "%s%s/", curr_dir->full_path, new_findex->name);
+        } break;
+        case DT_REG: {
+          new_findex->type = FINDEX_FILE;
+          strncpy(new_findex->full_path, curr_dir->full_path, PATH_MAX);
+        } break;
+        default: {
+          new_findex->type = FINDEX_UNKNOWN;
+          strncpy(new_findex->full_path, curr_dir->full_path, PATH_MAX);
+        } break;
       }
     }
 
-    if (curr_queue_idx >= queue_findex.size) {
-      // No more direcories to scan
-      break;
+    // Add folders to analyze
+    for (size_t i = 0; i < curr_dir->children.size; i++) {
+      Findex *ptr = &(curr_dir->children.items[i]);
+      if (ptr->type == FINDEX_DIR) {
+        findex__queue_append(&queue_findex, ptr);
+      }
     }
 
     if (closedir(dir) < 0) {
@@ -142,10 +148,16 @@ int findex_scan(Findex *node, char *path) {
       return -1;
     }
 
+    // Finished processing queue
+    if (curr_queue_idx >= queue_findex.size) {
+      free(queue_findex.items);
+      break;
+    }
+
     dir = NULL;
-    curr_dirent = NULL;
+    dirent = NULL;
     curr_dir = queue_findex.items[curr_queue_idx];
-    curr_queue_idx += 1;
+    curr_queue_idx++;
   }
 
   return 0;
@@ -201,26 +213,28 @@ Findex *findex__request_child(Findex_Array *array) {
   // Initialize array
   if (array->capacity == 0) {
     array->capacity = 1;
-    array->items = calloc(array->capacity, sizeof(Findex));
+    array->items = malloc(sizeof(Findex) * array->capacity);
     if (array->items == NULL) {
       printf("[ERROR]: "
              "Error in findex__request_child: "
-             "Could not allocate memory\n");
+             "Could not allocate memory for items\n");
       return NULL;
     }
+    memset(array->items, 0, sizeof(Findex) * array->capacity);
   }
 
-  // Expand array
+  // Expand array if needed
   if (array->size >= array->capacity) {
-    Findex *temp = calloc(array->capacity * 2, sizeof(Findex));
+    Findex *temp = malloc(sizeof(Findex) * (array->capacity * 2));
     if (temp == NULL) {
       printf("[ERROR]: "
              "Error in findex__request_child: "
-             "Could not allocate memory\n");
+             "Could not allocate more memory for items\n");
       return NULL;
     }
+    memset(temp, 0, sizeof(Findex) * (array->capacity * 2));
 
-    // Copy memory
+    // Copy existing Findexes
     memcpy(temp, array->items, array->size * sizeof(Findex));
     free(array->items);
     array->items = temp;
@@ -231,33 +245,35 @@ Findex *findex__request_child(Findex_Array *array) {
 }
 
 int findex__queue_append(Findex_Queue *queue, Findex *element) {
-  if (queue == NULL) {
+  if (queue == NULL || element == NULL) {
     return -1;
   }
 
   // Initialize queue
   if (queue->capacity == 0) {
     queue->capacity = 1;
-    queue->items = calloc(queue->capacity, sizeof(Findex *));
+    queue->items = malloc(sizeof(Findex *) * queue->capacity);
     if (queue->items == NULL) {
       printf("[ERROR]: "
              "Error in findex__queue_append: "
              "Could not allocate memory\n");
       return -1;
     }
+    memset(queue->items, 0, sizeof(Findex *) * queue->capacity);
   }
 
-  // Expand queue
+  // Expand queue if needed
   if (queue->size >= queue->capacity) {
-    Findex **temp = calloc(queue->capacity * 2, sizeof(Findex *));
+    Findex **temp = malloc(sizeof(Findex *) * (queue->capacity * 2));
     if (temp == NULL) {
       printf("[ERROR]: "
              "Error in findex__request_child: "
              "Could not allocate memory\n");
       return -1;
     }
+    memset(temp, 0, sizeof(Findex *) * (queue->capacity * 2));
 
-    // Copy memory
+    // Copy existing Findex pointers
     memcpy(temp, queue->items, queue->size * sizeof(Findex *));
     free(queue->items);
     queue->items = temp;
@@ -271,4 +287,4 @@ int findex__queue_append(Findex_Queue *queue, Findex *element) {
 }
 
 
-// #endif  // FINDEX_IMPLEMENTATION
+#endif  // FINDEX_IMPLEMENTATION
