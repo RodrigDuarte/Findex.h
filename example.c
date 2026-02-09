@@ -10,6 +10,12 @@ int main(void) {
 
   findex_print(&root, 0);
 
+  Findex *file = &root.children.items[0].children.items[0];
+  size_t output_len = 0;
+  char *output = findex_get_file_location(file, &output_len);
+
+  printf("\"%s\"\nOutput_len: %zu\n", output, output_len);
+
   findex_free(&root);
 
   findex_print(&root, 0);

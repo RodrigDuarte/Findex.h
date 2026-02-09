@@ -47,11 +47,15 @@ struct Findex_s {
 int findex_scan(Findex *node, char *path);
 int findex_free(Findex *node);
 void findex_print(Findex *node, size_t depth);
+char *findex_get_file_location(Findex *node, size_t *file_location_len);
 
 #endif  // FINDEX_H
 
 
 #ifdef FINDEX_IMPLEMENTATION
+
+// Private variable declarations
+char findex__buffer[PATH_MAX] = {0};
 
 // Private function declarations
 Findex *findex__request_child(Findex_Array *array);
@@ -202,6 +206,28 @@ void findex_print(Findex *node, size_t depth) {
   return;
 }
 
+char *findex_get_file_location(Findex *node, size_t *file_location_len) {
+  if (node->type != FINDEX_FILE) {
+    *file_location_len = 0;
+    return NULL;
+  }
+
+  memset(findex__buffer, 0, sizeof(findex__buffer));
+  size_t full_path_len = strlen(node->full_path);
+  size_t name_len      = strlen(node->name);
+
+  if (full_path_len + name_len >= sizeof(findex__buffer)) {
+    *file_location_len = 0;
+    return NULL;
+  }
+
+  memcpy(findex__buffer, node->full_path, full_path_len);
+  memcpy(findex__buffer + full_path_len, node->name, name_len);
+
+  *file_location_len = full_path_len + name_len;
+
+  return findex__buffer;
+}
 
 // Private functions
 
